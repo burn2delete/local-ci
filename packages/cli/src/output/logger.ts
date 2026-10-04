@@ -3,6 +3,20 @@ import fs from "fs";
 import { getWorkingDirectory } from "./working-directory.ts";
 import { getLogsDirectory } from "./logs-directory.ts";
 
+/** Stable resource namespace for independent checkouts on the same Docker daemon. */
+export function runnerBaseName(
+  runNumber: number,
+  namespace = process.env.LOCAL_CI_RUN_NAMESPACE,
+  prefix = "local-ci",
+): string {
+  if (namespace && !/^[a-z0-9_-]{1,16}$/.test(namespace)) {
+    throw new Error(
+      "LOCAL_CI_RUN_NAMESPACE must be 1–16 lowercase letters, digits, underscores or hyphens",
+    );
+  }
+  return namespace ? `${prefix}-${namespace}-${runNumber}` : `${prefix}-${runNumber}`;
+}
+
 /** Root of all run directories: `<workingDir>/runs/` */
 function getRunsDir(): string {
   return path.join(getWorkingDirectory(), "runs");

@@ -87,6 +87,12 @@ describe("buildRunResultJson", () => {
     finishedAt: new Date("2026-04-20T10:17:42Z"),
   };
 
+  it("keeps skipped placeholders distinct from executed passes in saved results", () => {
+    const result = buildRunResultJson({ ...base, results: [job({ skipped: true }), job()] });
+    expect(result.jobs.map((entry) => entry.status)).toEqual(["skipped", "passed"]);
+    expect(result.status).toBe("passed");
+  });
+
   it("marks run passed only when every job passed", () => {
     const r1 = buildRunResultJson({ ...base, results: [job(), job()] });
     expect(r1.status).toBe("passed");

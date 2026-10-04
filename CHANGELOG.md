@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added an optional checkout namespace for Docker runner names and report scheduler-skipped jobs as skipped in saved results and human summaries.
+
 - Added `LOCAL_CI_SKIP_GLOBAL_CLEANUP=1` for shared Docker daemons; per-run resource cleanup remains enabled.
 
 - Fixed step GitHub context and dependency results to match the actual local run, preserved real source snapshot history in runner workspaces, and limited checkout emulation to the Actions workspace so fixture repositories use normal Git behavior.

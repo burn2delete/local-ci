@@ -20,6 +20,26 @@ describe("Logger utilities", () => {
     vi.restoreAllMocks();
   });
 
+  describe("runnerBaseName", () => {
+    it("preserves the prewarm prefix with and without a checkout namespace", async () => {
+      const { runnerBaseName } = await import("./logger.ts");
+      expect(runnerBaseName(1, "", "local-ci-prewarm")).toBe("local-ci-prewarm-1");
+      expect(runnerBaseName(1, "checkout-a", "local-ci-prewarm")).toBe(
+        "local-ci-prewarm-checkout-a-1",
+      );
+    });
+    it("distinguishes isolated checkouts with the same initial run number", async () => {
+      const { runnerBaseName } = await import("./logger.ts");
+      expect(runnerBaseName(1, "checkout-a")).toBe("local-ci-checkout-a-1");
+      expect(runnerBaseName(1, "checkout-b")).toBe("local-ci-checkout-b-1");
+      expect(runnerBaseName(1, "")).toBe("local-ci-1");
+    });
+    it.each(["with spaces", "../outside"])("rejects unsafe namespace %s", async (namespace) => {
+      const { runnerBaseName } = await import("./logger.ts");
+      expect(() => runnerBaseName(1, namespace)).toThrow("LOCAL_CI_RUN_NAMESPACE");
+    });
+  });
+
   describe("ensureLogDirs", () => {
     it("creates the runs/ directory", async () => {
       const { setWorkingDirectory } = await import("./working-directory.ts");

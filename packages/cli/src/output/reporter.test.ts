@@ -34,6 +34,12 @@ describe("printSummary", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("counts skipped jobs separately from executed passes", () => {
+    printSummary([makeResult({ succeeded: true, skipped: true }), makeResult({ succeeded: true })]);
+    expect(output).toContain("1 passed");
+    expect(output).toContain("1 skipped");
+  });
+
   it("outputs full step log content when failedStepLogPath exists", () => {
     const logPath = path.join(tmpDir, "Run-assertion-test.log");
     fs.writeFileSync(logPath, "line 1\nline 2\nline 3\n");

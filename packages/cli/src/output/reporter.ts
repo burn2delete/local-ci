@@ -15,6 +15,8 @@ export interface JobResult {
   workflow: string;
   taskId: string;
   succeeded: boolean;
+  /** The scheduler omitted this job; it did not execute successfully. */
+  skipped?: boolean;
   durationMs: number;
   debugLogPath: string;
   steps?: StepResult[];
@@ -70,7 +72,8 @@ export function printSummary(results: JobResult[], runDir?: string): void {
     return;
   }
   const failures = results.filter((r) => !r.succeeded);
-  const passes = results.filter((r) => r.succeeded);
+  const passes = results.filter((r) => r.succeeded && !r.skipped);
+  const skips = results.filter((r) => r.skipped);
   const totalMs = results.reduce((sum, r) => sum + r.durationMs, 0);
 
   if (failures.length > 0) {
@@ -117,7 +120,8 @@ export function printSummary(results: JobResult[], runDir?: string): void {
       ? `✗ ${failures.length} failed, ${passes.length} passed`
       : `✓ ${passes.length} passed`;
 
-  process.stdout.write(`  Status:    ${status} (${results.length} total)\n`);
+  const skipStatus = skips.length > 0 ? `, ${skips.length} skipped` : "";
+  process.stdout.write(`  Status:    ${status}${skipStatus} (${results.length} total)\n`);
   process.stdout.write(`  Duration:  ${formatDuration(totalMs)}\n`);
   if (runDir) {
     process.stdout.write(`  Root:      ${runDir}\n`);

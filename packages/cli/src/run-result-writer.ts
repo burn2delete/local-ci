@@ -16,7 +16,7 @@ export interface RunResultStepEntry {
 export interface RunResultJobEntry {
   name: string;
   workflow: string;
-  status: "passed" | "failed";
+  status: "passed" | "failed" | "skipped";
   durationMs: number;
   failingStep?: string;
   /** Only present when the on-disk file still exists at write time. */
@@ -134,7 +134,7 @@ export function buildRunResultJson(input: RunResultInput): RunResultFile {
     const entry: RunResultJobEntry = {
       name: r.name,
       workflow: r.workflow,
-      status: r.succeeded ? "passed" : "failed",
+      status: r.skipped ? "skipped" : r.succeeded ? "passed" : "failed",
       durationMs: r.durationMs,
     };
     const debugLogPath = pathIfExists(r.debugLogPath);
