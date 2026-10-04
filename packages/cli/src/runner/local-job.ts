@@ -779,16 +779,13 @@ export async function executeLocalJob(
     // Prepare workspace files in parallel with container setup
     const workspacePrepStart = Date.now();
     const workspacePrepPromise = (async () => {
-      try {
-        await prepareWorkspace({
-          workflowPath: job.workflowPath,
-          headSha: job.headSha,
-          githubRepo: job.githubRepo,
-          workspaceDir: dirs.workspaceDir,
-        });
-      } catch (err) {
-        debugRunner(`Failed to prepare workspace: ${err}. Using host fallback.`);
-      }
+      await prepareWorkspace({
+        workflowPath: job.workflowPath,
+        headSha: job.headSha,
+        realHeadSha: job.realHeadSha,
+        githubRepo: job.githubRepo,
+        workspaceDir: dirs.workspaceDir,
+      });
 
       if (dirs.dependencyCacheDir) {
         const restored = restoreDependencyCache(
@@ -811,7 +808,10 @@ export async function executeLocalJob(
         // Non-fatal: entrypoint has a fallback
       }
       bt("workspace-prep", workspacePrepStart);
-    })();
+    })().then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
 
     // 6. Spawn container
     const dtuHost = await resolveDtuHost();
@@ -956,7 +956,10 @@ export async function executeLocalJob(
     });
     t0 = bt("container-create", t0);
 
-    await workspacePrepPromise;
+    const workspacePrep = await workspacePrepPromise;
+    if (!workspacePrep.ok) {
+      throw workspacePrep.error;
+    }
     t0 = Date.now();
     await container.start();
     bt("container-start", t0);

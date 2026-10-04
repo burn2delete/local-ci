@@ -1,75 +1,59 @@
-import { exec, execSync } from "child_process";
-import { promisify } from "util";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { copyWorkspace } from "../output/cleanup.ts";
 import { findRepoRoot } from "./metadata.ts";
 
-const execAsync = promisify(exec);
-
-// ─── Workspace preparation ────────────────────────────────────────────────────
+const execFileAsync = promisify(execFile);
 
 export interface PrepareWorkspaceOpts {
   workflowPath?: string;
   headSha?: string;
+  realHeadSha?: string;
   githubRepo?: string;
   workspaceDir: string;
 }
 
-/**
- * Copy source files into the workspace directory, then initialise a fake
- * git repo so `actions/checkout` finds a valid workspace.
- */
+/** Copy the source snapshot and import its real Git objects into a private repo. */
 export async function prepareWorkspace(opts: PrepareWorkspaceOpts): Promise<void> {
-  const { workflowPath, headSha, githubRepo, workspaceDir } = opts;
-
-  // Resolve repo root — needed for both archive and rsync paths.
-  // Derive from the workflow path (which lives inside the target repo) so we copy
-  // from the correct repo, not from the CLI's CWD (which is local-ci).
-  let repoRoot: string | undefined;
-  if (workflowPath) {
-    repoRoot = findRepoRoot(workflowPath);
-  }
-  if (!repoRoot) {
-    repoRoot = execSync(`git rev-parse --show-toplevel`).toString().trim();
-  }
+  const { workflowPath, headSha, realHeadSha, githubRepo, workspaceDir } = opts;
+  const repoRoot =
+    (workflowPath && findRepoRoot(workflowPath)) ||
+    execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  const { stdout } = await execFileAsync(
+    "git",
+    ["rev-parse", "--verify", `${realHeadSha ?? headSha ?? "HEAD"}^{commit}`],
+    { cwd: repoRoot },
+  );
+  const snapshot = stdout.trim();
 
   if (headSha && headSha !== "HEAD") {
-    // Specific SHA requested — use git archive (clean snapshot)
-    await execAsync(`git archive ${headSha} | tar -x -C ${workspaceDir}`, {
-      cwd: repoRoot,
-    });
+    // Arguments stay out of shell interpolation, including repo paths with spaces.
+    const archiveDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-ci-archive-"));
+    try {
+      const archive = path.join(archiveDir, "source.tar");
+      await execFileAsync("git", ["archive", "--output", archive, snapshot], { cwd: repoRoot });
+      await execFileAsync("tar", ["-xf", archive, "-C", workspaceDir]);
+    } finally {
+      fs.rmSync(archiveDir, { recursive: true, force: true });
+    }
   } else {
-    // Default: copy the working directory as-is, including dirty/untracked files.
-    // Uses git ls-files to respect .gitignore (avoids copying node_modules, _/, etc.)
-    // On macOS: per-file APFS CoW clones. On Linux: rsync. Fallback: fs.cpSync.
     copyWorkspace(repoRoot, workspaceDir);
   }
 
   if (githubRepo) {
-    await initFakeGitRepo(workspaceDir, githubRepo);
+    const git = (...args: string[]) => execFileAsync("git", args, { cwd: workspaceDir });
+    await git("init", "-q");
+    await git("config", "user.name", "local-ci");
+    await git("config", "user.email", "local-ci@example.com");
+    await git("remote", "add", "origin", `http://127.0.0.1/${githubRepo}`);
+    // Fetch from the host repo locally, including unreferenced dirty snapshot commits.
+    // Unlike shared clones/alternates, these objects remain usable inside Docker.
+    await git("fetch", "--quiet", "--no-tags", "--update-shallow", repoRoot, snapshot);
+    await git("reset", "--hard", snapshot);
+    await git("update-ref", "refs/remotes/origin/main", snapshot);
+    await git("checkout", "--quiet", "--detach", snapshot);
   }
-}
-
-// ─── Fake git init ────────────────────────────────────────────────────────────
-
-/**
- * Initialise a fake git repository in `dir` so that `actions/checkout`
- * finds a valid workspace with a remote origin and detached HEAD.
- *
- * Each command is awaited individually so the event loop can service the
- * render timer between git process spawns (avoids freezing all spinners).
- */
-async function initFakeGitRepo(dir: string, githubRepo: string): Promise<void> {
-  const opts = { cwd: dir };
-  // The remote URL must exactly match what actions/checkout computes via URL.origin.
-  // Node.js URL.origin strips the default port (80), so we must NOT include :80.
-  await execAsync(`git init`, opts);
-  await execAsync(`git config user.name "local-ci"`, opts);
-  await execAsync(`git config user.email "local-ci@example.com"`, opts);
-  await execAsync(`git remote add origin http://127.0.0.1/${githubRepo}`, opts);
-  await execAsync(`git add . && git commit -m "workspace" || true`, opts);
-  // Create main and refs/remotes/origin/main pointing to this commit
-  await execAsync(`git branch -M main`, opts);
-  await execAsync(`git update-ref refs/remotes/origin/main HEAD`, opts);
-  // Detach HEAD so checkout can freely delete ALL branches (it can't delete the current branch)
-  await execAsync(`git checkout --detach HEAD`, opts);
 }

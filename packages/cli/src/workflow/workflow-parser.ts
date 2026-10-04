@@ -850,6 +850,7 @@ function buildStepEnv(
   inputsContext: Record<string, string> | undefined,
   vars: Record<string, string> | undefined,
   runnerContext: RunnerContext | undefined,
+  githubContext: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
   const pick = (source: unknown): Record<string, unknown> => {
     if (!source || typeof source !== "object") {
@@ -888,6 +889,7 @@ function buildStepEnv(
           vars,
           runnerContext,
           envContext,
+          githubContext,
         ),
       ]),
     );
@@ -918,6 +920,7 @@ export async function parseWorkflowSteps(
   needsContext?: Record<string, Record<string, string>>,
   inputsContext?: Record<string, string>,
   vars?: Record<string, string>,
+  githubContext?: Record<string, string>,
 ) {
   const template = await getWorkflowTemplate(filePath);
   const rawYaml = parseYaml(fs.readFileSync(filePath, "utf8"));
@@ -961,6 +964,7 @@ export async function parseWorkflowSteps(
         inputsContext,
         vars,
         runnerContext,
+        githubContext,
       );
 
       // Prefer raw YAML name to preserve ${{ }} expressions for our own expansion.
@@ -977,6 +981,7 @@ export async function parseWorkflowSteps(
             vars,
             runnerContext,
             stepEnv,
+            githubContext,
           )
         : stepId;
 
@@ -1012,6 +1017,7 @@ export async function parseWorkflowSteps(
           vars,
           runnerContext,
           stepEnv,
+          githubContext,
         );
         const shell = resolveStepRunDefault(rawYaml, rawJob, rawStep, "shell");
         const inputs: Record<string, string> = {
@@ -1096,6 +1102,7 @@ export async function parseWorkflowSteps(
                       vars,
                       runnerContext,
                       stepEnv,
+                      githubContext,
                     ),
                   ]),
                 )
@@ -1114,6 +1121,7 @@ export async function parseWorkflowSteps(
                   vars,
                   runnerContext,
                   stepEnv,
+                  githubContext,
                 ),
               ]),
             ),
@@ -1135,6 +1143,7 @@ export async function parseWorkflowSteps(
                         vars,
                         runnerContext,
                         stepEnv,
+                        githubContext,
                       );
                       // The zero hash is a placeholder for "no SHA available" —
                       // normalize it to empty string so actions/checkout uses the

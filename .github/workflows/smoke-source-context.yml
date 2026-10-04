@@ -1,0 +1,52 @@
+name: "Smoke: source context and dependency results"
+
+# Local-only regression coverage of the simulated push and source snapshot.
+# Included by local-ci --all; it has no credentials or remote publishing steps.
+on:
+  workflow_dispatch:
+
+jobs:
+  succeeded:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "upstream succeeded without outputs"
+  excluded:
+    if: "false"
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+  conditioned:
+    needs: [succeeded, excluded]
+    if: always() && needs.succeeded.result == 'success' && needs.excluded.result == 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "dependency condition evaluated correctly"
+  called:
+    uses: ./.github/workflows/smoke-source-context-called.yml
+  verify:
+    needs: [succeeded, excluded, conditioned, called]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Verify source snapshot and simulated event
+        env:
+          SNAPSHOT: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          test "$SNAPSHOT" = "$GITHUB_SHA"
+          test "$EVENT" = "$GITHUB_EVENT_NAME"
+          test "$(git rev-parse HEAD)" = "$SNAPSHOT"
+          git cat-file -e "$SNAPSHOT^{commit}"
+          git cat-file -e "$SNAPSHOT^"
+      - name: Verify results for jobs without outputs
+        env:
+          SUCCEEDED: ${{ needs.succeeded.result }}
+          EXCLUDED: ${{ needs.excluded.result }}
+          CONDITIONED: ${{ needs.conditioned.result }}
+          CALLED: ${{ needs.called.result }}
+        run: |
+          test "$SUCCEEDED" = success
+          test "$EXCLUDED" = skipped
+          test "$CONDITIONED" = success
+          test "$CALLED" = success

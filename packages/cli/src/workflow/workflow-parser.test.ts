@@ -2667,3 +2667,59 @@ jobs:
     expect(parseJobRunsOn(filePath, "other")).toEqual([]);
   });
 });
+
+describe("parseWorkflowSteps with the run's GitHub context", () => {
+  const dirs: string[] = [];
+  afterEach(() =>
+    dirs.splice(0).forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })),
+  );
+
+  it("uses the same SHA and event in env, names, scripts and checkout inputs", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-github-context-"));
+    dirs.push(dir);
+    const workflow = path.join(dir, "ci.yml");
+    fs.writeFileSync(
+      workflow,
+      `
+name: Context
+on: [push]
+env:
+  SNAPSHOT: \${{ github.sha }}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      EVENT: \${{ github.event_name }}
+    steps:
+      - name: Verify \${{ github.sha }}
+        env:
+          OWNER: \${{ github.repository_owner }}
+        run: echo "\${{ github.sha }}:\${{ github.event_name }}"
+      - uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+`,
+    );
+    const github = {
+      sha: "1234567890abcdef1234567890abcdef12345678",
+      event_name: "push",
+      repository_owner: "example",
+    };
+    const steps = await parseWorkflowSteps(
+      workflow,
+      "verify",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      github,
+    );
+    expect(steps[0]).toMatchObject({
+      Name: `Verify ${github.sha}`,
+      Inputs: { script: `echo "${github.sha}:push"` },
+      Env: { SNAPSHOT: github.sha, EVENT: "push", OWNER: "example" },
+    });
+    expect(steps[1]?.Inputs.ref).toBe(github.sha);
+  });
+});

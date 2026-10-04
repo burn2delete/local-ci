@@ -19,70 +19,78 @@ export function writeGitShim(shimsDir: string, fakeSha: string): void {
 # Log every call for debugging
 echo "git $*" >> /home/runner/_diag/local-ci-git-calls.log
 
+# Resolve the effective repository after Git global options (notably -C / -c).
+# Fixture repositories must always see real Git, even when nested in the workspace.
+original_args=("$@")
+git_options=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -C|-c|--git-dir|--work-tree|--namespace)
+      [[ $# -ge 2 ]] || exec /usr/bin/git.real "\${original_args[@]}"
+      git_options+=("$1" "$2")
+      shift 2
+      ;;
+    --git-dir=*|--work-tree=*|--namespace=*|--bare|--no-pager|--paginate|--no-replace-objects)
+      git_options+=("$1")
+      shift
+      ;;
+    *) break ;;
+  esac
+done
+repository=$(/usr/bin/git.real "\${git_options[@]}" rev-parse --show-toplevel 2>/dev/null)
+workspace=$(cd "\${GITHUB_WORKSPACE:-/nonexistent}" 2>/dev/null && pwd -P)
+if [[ -z "$workspace" || "$repository" != "$workspace" ]]; then
+  exec /usr/bin/git.real "\${original_args[@]}"
+fi
+
 # actions/checkout probes the remote URL via config.
 # It computes the expected URL using URL.origin, which strips the default port 80.
 # So we must return the URL WITHOUT :80 to match.
-if [[ "$*" == *"config --local --get remote.origin.url"* || "$*" == *"config --get remote.origin.url"* ]]; then
+if [[ "$1" == "config" && ( "$*" == "config --local --get remote.origin.url" || "$*" == "config --get remote.origin.url" ) ]]; then
   echo "https://github.com/\${GITHUB_REPOSITORY}"
   exit 0
 fi
 
 # actions/checkout probes ls-remote to find the target SHA.
 # Return the same SHA that github.sha uses in the job definition.
-if [[ "$*" == *"ls-remote"* ]]; then
-  echo "${fakeSha}\\tHEAD"
-  echo "${fakeSha}\\trefs/heads/main"
+if [[ "$1" == "ls-remote" ]]; then
+  printf '%s\\t%s\\n' "${fakeSha}" HEAD "${fakeSha}" refs/heads/main
   exit 0
 fi
 
 # Intercept fetch - we don't have a real git server, so fetch is a no-op.
 # But we must create refs/remotes/origin/main so checkout's post-fetch validation passes.
-if [[ "$*" == *"fetch"* ]]; then
+if [[ "$1" == "fetch" ]]; then
   echo "[Local CI Shim] Intercepted 'fetch' - workspace is pre-populated."
   # If this is a fresh git init (no commits), create a seed commit
   # so HEAD is valid and we can create branches from it.
-  if ! /usr/bin/git.real rev-parse HEAD >/dev/null 2>&1; then
-    /usr/bin/git.real config user.name "local-ci" 2>/dev/null
-    /usr/bin/git.real config user.email "local-ci@example.com" 2>/dev/null
-    /usr/bin/git.real add -A 2>/dev/null
-    /usr/bin/git.real commit --allow-empty -m "workspace" 2>/dev/null
+  if ! /usr/bin/git.real "\${git_options[@]}" rev-parse HEAD >/dev/null 2>&1; then
+    /usr/bin/git.real "\${git_options[@]}" config user.name "local-ci" 2>/dev/null
+    /usr/bin/git.real "\${git_options[@]}" config user.email "local-ci@example.com" 2>/dev/null
+    /usr/bin/git.real "\${git_options[@]}" add -A 2>/dev/null
+    /usr/bin/git.real "\${git_options[@]}" commit --allow-empty -m "workspace" 2>/dev/null
   fi
-  /usr/bin/git.real update-ref refs/remotes/origin/main HEAD 2>/dev/null || true
+  /usr/bin/git.real "\${git_options[@]}" update-ref refs/remotes/origin/main HEAD 2>/dev/null || true
   # actions/checkout may detach at FETCH_HEAD after a successful fetch.
-  /usr/bin/git.real rev-parse HEAD > "$(/usr/bin/git.real rev-parse --git-path FETCH_HEAD)" || exit $?
+  /usr/bin/git.real "\${git_options[@]}" rev-parse HEAD > "$(/usr/bin/git.real "\${git_options[@]}" rev-parse --path-format=absolute --git-path FETCH_HEAD)" || exit $?
   exit 0
 fi
 
 # Redirect: git checkout ... refs/remotes/origin/main -> create local main from HEAD.
 # Note: actions/checkout deletes the local 'main' branch before fetching, so we cannot
 # checkout the local branch - instead we recreate it from the current HEAD commit.
-if [[ "$*" == *"checkout"* && "$*" == *"refs/remotes/origin/"* ]]; then
+if [[ "$1" == "checkout" && "$*" == *"refs/remotes/origin/"* ]]; then
   echo "[Local CI Shim] Redirecting remote checkout - recreating main from HEAD."
-  /usr/bin/git.real checkout -B main HEAD
+  /usr/bin/git.real "\${git_options[@]}" checkout -B main HEAD
   exit $?
 fi
 
-# Intercept clean and rm which can destroy workspace files
-if [[ "$1" == "clean" || "$1" == "rm" ]]; then
-  echo "[Local CI Shim] Intercepted '$1' to protect local files."
-  exit 0
-fi
-
-# Intercept rev-parse for HEAD/refs/heads/main so the SHA matches github.sha
-# actions/checkout validates that refs/heads/main == github.sha after checkout
-if [[ "$1" == "rev-parse" ]]; then
-  for arg in "$@"; do
-    if [[ "$arg" == "HEAD" || "$arg" == "refs/heads/main" || "$arg" == "refs/remotes/origin/main" ]]; then
-      echo "${fakeSha}"
-      exit 0
-    fi
-  done
-  # Fall through for other rev-parse calls (e.g. rev-parse --show-toplevel)
-fi
+# Commit/object queries and local edits use real Git. The workspace now owns
+# the actual source objects, so no SHA spoofing or destructive-command no-ops.
 
 # Pass through all other git commands (checkout, reset, log, init, config, etc.)
 echo "git $@ (pass-through)" >> /home/runner/_diag/local-ci-git-calls.log
-/usr/bin/git.real "$@"
+/usr/bin/git.real "\${original_args[@]}"
 EXIT_CODE=$?
 echo "git $@ exited with $EXIT_CODE" >> /home/runner/_diag/local-ci-git-calls.log
 exit $EXIT_CODE

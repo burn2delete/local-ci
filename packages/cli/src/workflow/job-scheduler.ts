@@ -59,3 +59,17 @@ export function topoSort(deps: Map<string, string[]>): string[][] {
   }
   return waves;
 }
+
+/** Combine completed matrix legs / reusable sub-jobs without losing failures. */
+export function aggregateJobResults(results: string[]): string {
+  if (results.includes("failure")) {
+    return "failure";
+  }
+  if (results.includes("cancelled")) {
+    return "cancelled";
+  }
+  if (results.length > 0 && results.every((result) => result === "skipped")) {
+    return "skipped";
+  }
+  return results.length > 0 ? "success" : "";
+}

@@ -139,3 +139,17 @@ describe("topoSort", () => {
     expect(waves[0]).toEqual(expect.arrayContaining(["a", "b"]));
   });
 });
+
+describe("aggregateJobResults", () => {
+  it.each([
+    [["failure", "success"], "failure"],
+    [["success", "failure"], "failure"],
+    [["skipped", "skipped"], "skipped"],
+    [["skipped", "success"], "success"],
+    [["cancelled", "success"], "cancelled"],
+    [[], ""],
+  ])("aggregates %j as %s", async (results, expected) => {
+    const { aggregateJobResults } = await import("./job-scheduler.ts");
+    expect(aggregateJobResults(results as string[])).toBe(expected);
+  });
+});

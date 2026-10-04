@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed step GitHub context and dependency results to match the actual local run, preserved real source snapshot history in runner workspaces, and limited checkout emulation to the Actions workspace so fixture repositories use normal Git behavior.
+
 - Fixed simulated Git fetches to write `FETCH_HEAD`, allowing actions to check out the fetched commit in detached mode.
 - Restored SLSA provenance for the `@redwoodjs/agent-ci` compatibility package so pnpm's no-downgrade trust policy can upgrade safely.
 - Renamed Agent CI to Local CI. The canonical npm package is now `run-local-ci` and the executable is `local-ci`; `@redwoodjs/agent-ci`, the `agent-ci` executable, `AGENT_CI_*`, `.env.agent-ci`, and legacy Docker resources remain supported compatibility aliases through the remaining `0.x` releases.

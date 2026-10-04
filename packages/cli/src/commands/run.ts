@@ -66,7 +66,7 @@ import {
   killOrphanedContainers,
   pruneStaleWorkspaces,
 } from "../docker/shutdown.ts";
-import { topoSort } from "../workflow/job-scheduler.ts";
+import { aggregateJobResults, topoSort } from "../workflow/job-scheduler.ts";
 import { expandReusableJobs, type ExpandedJobEntry } from "../workflow/reusable-workflow.ts";
 import { prefetchRemoteWorkflows } from "../workflow/remote-workflow-fetch.ts";
 import { printSummary, type JobResult } from "../output/reporter.ts";
@@ -679,6 +679,7 @@ async function runPrewarmThrough(options: {
       repository_owner: owner,
       actor: owner,
       sha: realHeadSha,
+      event_name: "push",
     },
   };
 
@@ -699,6 +700,7 @@ async function runPrewarmThrough(options: {
       undefined,
       undefined,
       options.vars,
+      workflowExpressionContext.githubContext,
     ),
     options.spec.stepId,
   );
@@ -1502,6 +1504,7 @@ async function handleWorkflow(options: {
     repository_owner: owner,
     actor: owner,
     sha: realHeadSha,
+    event_name: "push",
   };
 
   const remoteCacheDir = path.resolve(getWorkingDirectory(), "cache", "remote-workflows");
@@ -1659,6 +1662,7 @@ async function handleWorkflow(options: {
       undefined,
       inputsContext,
       vars,
+      workflowGithubContext,
     );
     const expressionContext = {
       repoPath: repoRoot,
@@ -1828,6 +1832,7 @@ async function handleWorkflow(options: {
       needsContext,
       inputsContext,
       vars,
+      workflowGithubContext,
     );
     const expressionContext = {
       repoPath: repoRoot,
@@ -1889,31 +1894,47 @@ async function handleWorkflow(options: {
     filteredWaves.push(Array.from(taskNamesInWf));
   }
 
-  /** Build a needsContext for a job from its dependencies' accumulated outputs */
+  // Concrete runner results preserve every matrix leg before aggregation.
+  const runnerResults = new Map<string, string>();
+  const jobResultStatus = new Map<string, string>();
+  const recordJobResult = (ej: ExpandedJob, status: string) => {
+    runnerResults.set(ej.runnerName, status);
+    const legs = expandedJobs.filter((job) => job.taskName === ej.taskName);
+    const statuses = legs.map((job) => runnerResults.get(job.runnerName));
+    if (statuses.some((result) => result === undefined)) {
+      return;
+    }
+    jobResultStatus.set(ej.taskName, aggregateJobResults(statuses as string[]));
+  };
+
+  /** Build expression context from the dependencies' outputs AND actual results. */
   const buildNeedsContext = (jobId: string): Record<string, Record<string, string>> | undefined => {
     const jobDeps = deps.get(jobId);
-    if (!jobDeps || jobDeps.length === 0) {
+    if (!jobDeps?.length) {
       return undefined;
     }
     const ctx: Record<string, Record<string, string>> = {};
     for (const depId of jobDeps) {
-      ctx[depId] = jobOutputs.get(depId) ?? {};
+      const dependency = {
+        ...jobOutputs.get(depId),
+        __result: jobResultStatus.get(depId) ?? "",
+      };
+      ctx[depId] = dependency;
       if (depId.includes("/")) {
-        const callerJobId = depId.split("/")[0];
-        const calledJobId = depId.split("/").slice(1).join("/");
-        // For composite IDs like "lint/setup", also add the called job ID ("setup")
-        // so intra-workflow `needs.setup.outputs.*` references resolve correctly
-        if (!ctx[calledJobId]) {
-          ctx[calledJobId] = jobOutputs.get(depId) ?? {};
-        }
-        // If workflow_call outputs were resolved for the caller (e.g. "lint"),
-        // add them so downstream `needs.lint.outputs.*` references work
-        if (jobOutputs.has(callerJobId)) {
-          ctx[callerJobId] = jobOutputs.get(callerJobId)!;
-        }
+        const [callerJobId, ...calledId] = depId.split("/");
+        const calledJobId = calledId.join("/");
+        ctx[calledJobId] ??= dependency;
+        const subJobs = expandedJobs.filter((job) => job.callerJobId === callerJobId);
+        const statuses = subJobs.map((job) => runnerResults.get(job.runnerName));
+        ctx[callerJobId] = {
+          ...jobOutputs.get(callerJobId),
+          __result: statuses.every((status) => status !== undefined)
+            ? aggregateJobResults(statuses as string[])
+            : "",
+        };
       }
     }
-    return Object.keys(ctx).length > 0 ? ctx : undefined;
+    return ctx;
   };
 
   /** Collect outputs from a completed job result */
@@ -1971,9 +1992,6 @@ async function handleWorkflow(options: {
     }
   };
 
-  // Track job results for if-condition evaluation (success/failure status)
-  const jobResultStatus = new Map<string, string>();
-
   /** Check if a job should be skipped based on its if: condition */
   const shouldSkipJob = (jobId: string, ej?: ExpandedJob): boolean => {
     const ejWorkflowPath = ej?.workflowPath ?? workflowPath;
@@ -2004,20 +2022,26 @@ async function handleWorkflow(options: {
   const runOrSkipJob = async (ej: ExpandedJob): Promise<JobResult> => {
     const osSkip = maybeSkipUnsupportedOS(ej);
     if (osSkip) {
-      jobResultStatus.set(ej.taskName, "skipped");
+      recordJobResult(ej, "skipped");
       return osSkip;
     }
     if (shouldSkipJob(ej.taskName, ej)) {
       debugCli(`Skipping ${ej.taskName} (if: condition is false)`);
       const result = skippedResult(ej);
-      jobResultStatus.set(ej.taskName, "skipped");
+      recordJobResult(ej, "skipped");
       return result;
     }
     const ctx = buildNeedsContext(ej.taskName);
-    const result = await runJob(ej, ctx);
-    jobResultStatus.set(ej.taskName, result.succeeded ? "success" : "failure");
-    collectOutputs(result, ej.taskName);
-    return result;
+    try {
+      const result = await runJob(ej, ctx);
+      recordJobResult(ej, result.succeeded ? "success" : "failure");
+      collectOutputs(result, ej.taskName);
+      return result;
+    } catch (error) {
+      // Setup/executor errors are failures too, even before a JobResult exists.
+      recordJobResult(ej, "failure");
+      throw error;
+    }
   };
 
   const seenErrorMessages = new Set<string>();

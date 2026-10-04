@@ -1,0 +1,14 @@
+name: "Smoke: source context reusable dependency"
+on:
+  workflow_call:
+
+jobs:
+  excluded:
+    if: "false"
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+  succeeded:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "reusable succeeded without workflow outputs"
