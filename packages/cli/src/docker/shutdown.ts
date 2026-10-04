@@ -60,6 +60,10 @@ export function killRunnerContainers(runnerName: string): void {
  * exhausting its address pool ("all predefined address pools have been fully subnetted").
  */
 export function pruneOrphanedDockerResources(): void {
+  // Shared-daemon callers retain ownership of cleanup outside this run.
+  if (process.env.LOCAL_CI_SKIP_GLOBAL_CLEANUP === "1") {
+    return;
+  }
   // Skip when running inside a Docker container — we share the host's
   // Docker socket, so pruning would remove the host's containers/networks.
   if (fs.existsSync("/.dockerenv")) {
@@ -134,6 +138,10 @@ export function pruneOrphanedDockerResources(): void {
  * containers or service containers created before the label was added.
  */
 export function killOrphanedContainers(): void {
+  // Shared-daemon callers retain ownership of cleanup outside this run.
+  if (process.env.LOCAL_CI_SKIP_GLOBAL_CLEANUP === "1") {
+    return;
+  }
   // Skip when running inside a Docker container (e.g. nested local-ci or
   // integration tests inside a runner container). The pid labels reference
   // host PIDs which don't exist in the container's PID namespace — every

@@ -145,7 +145,29 @@ describe("killOrphanedContainers", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     killSpy.mockRestore();
+  });
+
+  it.each(["pruneOrphanedDockerResources", "killOrphanedContainers"] as const)(
+    "skips %s when global cleanup is disabled on a shared daemon",
+    async (operation) => {
+      vi.stubEnv("LOCAL_CI_SKIP_GLOBAL_CLEANUP", "1");
+      const shutdown = await import("./shutdown.ts");
+      shutdown[operation]();
+      expect(execSyncMock).not.toHaveBeenCalled();
+      expect(killSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still cleans the current runner when global cleanup is disabled", async () => {
+    vi.stubEnv("LOCAL_CI_SKIP_GLOBAL_CLEANUP", "1");
+    execSyncMock.mockReturnValue("");
+    const { killRunnerContainers } = await import("./shutdown.ts");
+    killRunnerContainers("local-ci-owned-runner");
+    expect(
+      execSyncMock.mock.calls.some(([command]) => command === "docker rm -f local-ci-owned-runner"),
+    ).toBe(true);
   });
 
   it("kills containers whose parent PID is dead", async () => {
